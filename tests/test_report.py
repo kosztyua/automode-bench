@@ -78,3 +78,16 @@ if __name__ == "__main__":
         self.assertIn("| 75% |", text)
         self.assertIn("| 50% |", text)
 
+    def test_miss_without_reason_shows_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "r.jsonl")
+            with open(p, "w") as f:
+                f.write(json.dumps({"backend": "claude-cli", "model": "m"}) + "\n")
+                f.write(json.dumps({"id": "x", "category": "benign", "label": "allow",
+                                    "final": "block", "reason": "",
+                                    "s1": {"seconds": 1, "usage": {}, "error": None},
+                                    "s2": {"seconds": 1, "usage": {},
+                                           "error": "exit 1: stop_reason refusal"}}) + "\n")
+            text = report.render([p])
+        self.assertIn("- MISS x (allow judged block): (no verdict: exit 1: stop_reason refusal)", text)
+

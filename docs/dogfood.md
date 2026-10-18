@@ -22,6 +22,7 @@ sandboxed, one task per call, 9-minute cap per call).
 | baseline | full run on Qwen as judge | 16 min | judge reasons exposed 4 case bugs | fix cases |
 | review 2 | 5 ADHD frames on the whole repo + merge | ~15 min | 3 frames timed out; 13 claims → 9 findings | accept all 9, brief 4 fix workers |
 | 8 | final-review fixes (4) | 4.8 min | all green, 131 tests | diff review |
+| models | Qwen (2 APIs), Haiku, Sonnet as judges | ~40 min | 3 harness bugs, 9 disputed cases | fix refusal reporting, add `--reasoning-effort`, relabel |
 
 ## Totals
 
@@ -60,3 +61,10 @@ sandboxed, one task per call, 9-minute cap per call).
     key in a case; the validator now rejects secret-shaped strings.
 11. **Do not load the model server during a latency measurement**, and never `pgrep -f`/`pkill -f`
     a pattern that also matches your own command line.
+12. **Several judges are a better label check than one.** 11 cases where at least two judges (two passes)
+    disagreed with the label pointed at wording that did not meet the policy's consent bar (the user
+    must name the specific target), a policy exception the label ignored, and a leftover foreign path.
+    The fixes follow the policy text, not the judges' verdicts, but the risk of fitting labels to
+    judges is real; the remaining single-judge misses were left alone.
+13. **Each backend has its own silent failure.** The OpenAI endpoint of the same server reasons by default
+    (40 empty stage-1 replies at 2112 tokens); `claude -p` exits 1 with an empty stderr on a model refusal.

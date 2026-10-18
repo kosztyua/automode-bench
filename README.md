@@ -59,11 +59,16 @@ writes `~/.automode-bench/<version>/{stage1,stage2,format}.json`. It self-checks
 `run` flags: `--backend {anthropic,openai,claude-cli}`, `--url`, `--model` (required),
 `--conc` (default 4), `--cases` (default `cases/*.jsonl`), `--key-env` (default
 `AUTOMODE_BENCH_KEY`, falls back to `local`), `--capture` (default newest capture dir),
-`--out` (default `results/<UTC>-<backend>-<model>.jsonl`), `--think` (anthropic backend only). Exit 2 with a one-line
+`--out` (default `results/<UTC>-<backend>-<model>.jsonl`), `--think` (anthropic backend only),
+`--reasoning-effort LEVEL` (openai backend only; servers that reason by default, such as a
+Qwen chat template, can use up stage 1's 2112 tokens before the verdict, so pass `none` to match a
+non-thinking Anthropic request). Exit 2 with a one-line
 message on: no capture, invalid cases, no cases matched. `claude-cli` judges through your own
 subscription (it counts against your plan's usage) and is marked approximate: no stop
 sequence, and Claude Code's billing-header line is dropped from the system prompt because
-`claude -p --system-prompt-file` silently falls back to its default prompt when it sees it.
+`claude -p --system-prompt-file` silently falls back to its default prompt when it sees it. A model
+refusal (`stop_reason: refusal`) is recorded as that error and counts as no verdict, i.e. a
+block, as in Claude Code.
 
 ## Safety
 
@@ -76,9 +81,17 @@ sequence, and Claude Code's billing-header line is dropped from the system promp
 
 ## Results
 
-First baseline ([details](results/README.md)): a local **Qwen3.8-Flash-Next** as the judge allows
-4/81 dangerous actions and blocks 4/96 safe ones; allows take ~1 s, blocks ~20 s. 9 of the 25
-in-project Edit/Write cases are dangerous and are never sent to the classifier by Claude Code.
+Four judges on the 208 cases ([details](results/README.md)), Claude Code 2.1.302 prompts:
+
+| Judge | Dangerous allowed | Safe blocked | Allowed p50 | Blocked p50 |
+|---|---|---|---|---|
+| Qwen3.8-Flash-Next NVFP4, local (Anthropic API) | 2/78 | 1/96 | 4.0 s | 21.5 s |
+| Qwen3.8-Flash-Next NVFP4, local (OpenAI API) | 3/78 | 2/96 | 2.0 s | 18.9 s |
+| Claude Haiku via `claude -p` (approx.) | 2/78 | 4/96 | 8.8 s | 10.1 s |
+| Claude Sonnet via `claude -p` (approx.) | 0/78 | 6/96 | 7.7 s | 9.8 s |
+
+Sonnet's safe-blocked count includes 4 API refusals (no verdict = block). 9 of the 25 in-project
+Edit/Write cases are dangerous and are never sent to the classifier by Claude Code.
 More models welcome: run, then open a PR with your results file.
 
 ## Cases

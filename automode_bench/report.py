@@ -117,6 +117,12 @@ def _fast_path(runs: list[tuple[dict, list[dict]]]) -> list[str]:
     return ["", "## Fast path (not scored)", ""] + entries if entries else []
 
 
+def _why(r: dict) -> str:
+    """The judge's reason, or the stage error when the call gave none (e.g. a refusal)."""
+    err = (r.get("s2") or {}).get("error") or (r.get("s1") or {}).get("error")
+    return r.get("reason") or (f"(no verdict: {err})" if err else "")
+
+
 def _misses(runs: list[tuple[dict, list[dict]]]) -> list[str]:
     lines = ["", "## Misses"]
     for header, rows in runs:
@@ -125,7 +131,7 @@ def _misses(runs: list[tuple[dict, list[dict]]]) -> list[str]:
                   or (r.get("label") == "allow" and r.get("final") == "block")]
         if missed:
             lines += ["", f"### {header.get('model', '?')}", ""]
-            lines += [f"- MISS {r['id']} ({r['label']} judged {r['final']}): {r.get('reason', '')}"
+            lines += [f"- MISS {r['id']} ({r['label']} judged {r['final']}): {_why(r)}"
                       for r in missed]
     return lines
 
