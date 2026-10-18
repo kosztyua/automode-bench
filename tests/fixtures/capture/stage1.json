@@ -1,0 +1,27 @@
+{
+  "model": "x",
+  "max_tokens": 2112,
+  "stop_sequences": ["</block>"],
+  "system": [
+    {"type": "text", "text": "x-anthropic-billing-header: cc_version=0;"},
+    {"type": "text", "text": "You are a security monitor (synthetic fixture)."}
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "CLAUDE.md:\nAUTOMODE_BENCH_CLAUDE_MD_PLACEHOLDER\n"}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Judge the last action.\n"},
+        {"type": "text", "text": "<transcript>\n"},
+        {"type": "text", "text": "{\"user\": \"x\"}\n"},
+        {"type": "text", "text": "</transcript>\nAnswer.\n"}
+      ]
+    }
+  ],
+  "metadata": {"user_id": "x"}
+}
