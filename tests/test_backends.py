@@ -106,6 +106,14 @@ class CallTest(unittest.TestCase):
         self.assertEqual(res["usage"], {"total_tokens": 7})
         self.assertIsNone(res["error"])
 
+    def test_openai_reasoning_effort_passed_only_when_set(self):
+        url, srv = self.serve(reply=json.dumps({
+            "choices": [{"message": {"content": "<block>no"}}]}).encode())
+        backends.call("openai", url, ANTHROPIC_REQUEST)
+        backends.call("openai", url, {**ANTHROPIC_REQUEST, "reasoning_effort": "none"})
+        self.assertNotIn("reasoning_effort", srv.requests[0]["body"])
+        self.assertEqual(srv.requests[1]["body"]["reasoning_effort"], "none")
+
     def test_openai_null_content(self):
         url, _ = self.serve(reply=json.dumps({"choices": [{"message": {"content": None}}], "usage": {}}).encode())
         res = backends.call("openai", url, ANTHROPIC_REQUEST)

@@ -139,6 +139,15 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 2, backend)
             self.assertIn("--think is only supported with --backend anthropic", err)
 
+    def test_run_reasoning_effort_with_non_openai_backend_exits_2(self):
+        code, _, err = _run_cli([
+            "run", "--backend", "anthropic", "--model", "m", "--cases", GOOD,
+            "--capture", CAPTURE, "--reasoning-effort", "none",
+            "--out", os.path.join(self.tmp.name, "r.jsonl"),
+        ])
+        self.assertEqual(code, 2)
+        self.assertIn("--reasoning-effort is only supported with --backend openai", err)
+
     def _run_with_format(self, cap_dir, url):
         return _run_cli([
             "run", "--backend", "anthropic", "--url", url, "--model", "m",

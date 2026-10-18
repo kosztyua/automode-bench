@@ -129,6 +129,8 @@ def _openai_body(request: dict) -> dict:
     }
     if request.get("stop_sequences"):
         body["stop"] = request["stop_sequences"]
+    if request.get("reasoning_effort"):
+        body["reasoning_effort"] = request["reasoning_effort"]
     return body
 
 

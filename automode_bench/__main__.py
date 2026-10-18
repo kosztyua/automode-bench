@@ -52,6 +52,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.think and args.backend != "anthropic":
         print("--think is only supported with --backend anthropic", file=sys.stderr)
         return 2
+    if args.reasoning_effort and args.backend != "openai":
+        print("--reasoning-effort is only supported with --backend openai", file=sys.stderr)
+        return 2
     try:
         cap = prompts.load_capture(args.capture or prompts.capture_dir())
         if not cap["format"].get("claude_code"):
@@ -72,6 +75,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if args.think:
             request["thinking"] = {"type": "enabled",
                                    "budget_tokens": min(4096, request["max_tokens"] // 2)}
+        if args.reasoning_effort:
+            request["reasoning_effort"] = args.reasoning_effort
         return backends.call(args.backend, args.url, request, key)
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -84,7 +89,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         "claude_code": cap["format"]["claude_code"],
         "cases_hash": _cases_hash(paths),
         "started": ts,
-        "flags": {"conc": args.conc, "think": args.think, "cases": args.cases},
+        "flags": {"conc": args.conc, "think": args.think, "reasoning_effort": args.reasoning_effort, "cases": args.cases},
     }
     rows = runner.run(cases, cap, call_fn, args.model, args.conc)
     runner.write_results(out, header, rows)
@@ -155,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="capture dir (default: newest under ~/.automode-bench)")
     r.add_argument("--out", default=None)
     r.add_argument("--think", action="store_true", help="add thinking to the request")
+    r.add_argument("--reasoning-effort", help="openai only: send reasoning_effort (e.g. none); "
+                   "servers otherwise apply their own default")
     r.set_defaults(func=_cmd_run)
 
     rep = sub.add_parser("report", help="Markdown comparison of results files")
