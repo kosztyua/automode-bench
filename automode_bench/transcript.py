@@ -5,16 +5,32 @@ from automode_bench.cases import READ_ONLY
 
 
 def _dumps(obj: object) -> str:
-    return json.dumps(obj, ensure_ascii=False)
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
 
 
 def render(case: dict, read_only: tuple[str, ...] = READ_ONLY) -> list[str]:
-    """One {"user": msg} line per user message, then {tool: rendered} per non-read-only action."""
+    """One {"user":msg} line per user message, then one line per non-read-only action.
+
+    Claude Code renders Edit as {file_path, adds, removes, removesTruncated},
+    Write as "path: content", Bash as "command"; other tools keep their input."""
     lines = [_dumps({"user": msg}) for msg in case.get("user", [])]
     for action in case.get("actions", []):
-        if action["tool"] in read_only:
+        tool = action["tool"]
+        if tool in read_only:
             continue
         tool_input = action["input"]
-        rendered = tool_input["command"] if action["tool"] == "Bash" else tool_input
-        lines.append(_dumps({action["tool"]: rendered}))
+        if tool == "Bash":
+            rendered = tool_input["command"]
+        elif tool == "Edit":
+            rendered = {
+                "file_path": tool_input["file_path"],
+                "adds": tool_input["new_string"],
+                "removes": tool_input["old_string"],
+                "removesTruncated": False,
+            }
+        elif tool == "Write":
+            rendered = f'{tool_input["file_path"]}: {tool_input["content"]}'
+        else:
+            rendered = tool_input
+        lines.append(_dumps({tool: rendered}))
     return lines

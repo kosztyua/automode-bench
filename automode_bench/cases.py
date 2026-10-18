@@ -11,6 +11,8 @@ CATEGORIES: tuple[str, ...] = (
 )
 LABELS = ("block", "allow", "judgment")
 READ_ONLY = ("Read", "Grep", "Glob")
+# Input keys transcript.render reads for each tool.
+_NEEDS = {"Bash": ("command",), "Edit": ("file_path", "old_string", "new_string"), "Write": ("file_path", "content")}
 
 _OK_HOSTS = {
     "localhost", "example.com", "example.net", "example.org",
@@ -34,6 +36,10 @@ _DEV_TCP = re.compile(r"/dev/(?:tcp|udp)/([^/\s]+)/")
 _SOCKET = re.compile(r"(?:create_connection|connect)\(\s*\(\s*['\"]([^'\"]+)['\"]")
 _SEGMENT = re.compile(r"\|\||&&|[;\n|]")
 _LABEL = re.compile(r"[A-Za-z]{2,}$")
+_FILE_EXT = frozenset(
+    "txt json sh py gz tgz tar zip log md pem key csv yml yaml conf html js toml ini cfg out bin"
+    .split()
+)
 
 
 def load_cases(paths: list[str]) -> list[dict]:
@@ -92,7 +98,10 @@ def hosts_in(text: str) -> set[str]:
         if not toks or toks[0].strip("'\"").rsplit("/", 1)[-1] not in _NET_CMDS:
             continue
         for t in toks[1:]:
-            if t.startswith("-") or "://" in t:
+            if t.startswith(("-", "@", "~", ".", "/")) or "://" in t:
+                continue
+            head, _, last = t.rpartition(".")
+            if head and last.lower() in _FILE_EXT:  # file name, not a host
                 continue
             if (h := _as_host(t)):
                 hosts.add(h)
@@ -142,6 +151,9 @@ def _check(case: dict, dup: bool, by_id: dict[str, dict]) -> list[str]:
         add("empty actions")
     elif not all(isinstance(a, dict) and a.get("tool") and "input" in a for a in actions):
         add("every action needs tool and input")
+    elif bad := [f"{a['tool']} needs {k}" for a in actions for k in _NEEDS.get(a["tool"], ())
+                 if not isinstance(a["input"], dict) or not isinstance(a["input"].get(k), str)]:
+        add("; ".join(bad))
     elif actions[-1]["tool"] in READ_ONLY:
         add(f"last action is read-only ({actions[-1]['tool']})")
     pair = case.get("pair")

@@ -5,6 +5,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
+from automode_bench.cases import READ_ONLY
 from automode_bench.prompts import build_request
 from automode_bench.transcript import render
 
@@ -23,7 +24,8 @@ def _stage(res: dict) -> dict:
 
 def decide(case: dict, capture: dict, call_fn, model: str) -> dict:
     """Run stage 1, then stage 2 unless stage 1 said no; return the results row."""
-    lines = render(case)
+    read_only = tuple(capture["format"].get("read_only", READ_ONLY))
+    lines = render(case, read_only)
     claude_md = case.get("claude_md")
     res1 = call_fn(build_request(capture["stage1"], lines, claude_md, model))
     v1 = parse_verdict(res1["text"])

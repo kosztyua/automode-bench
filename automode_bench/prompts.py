@@ -52,16 +52,30 @@ def build_request(
     stage: dict, lines: list[str], claude_md: str | None, model: str
 ) -> dict:
     """Copy a captured request with the transcript, CLAUDE.md slot, and model replaced."""
+    if not lines:
+        raise ValueError("build_request needs at least one transcript line")
     req = copy.deepcopy(stage)
     req["model"] = model
     req.pop("metadata", None)
     blocks = req["messages"][-1]["content"]
     start = _find_marker(blocks, "<transcript>")
     end = _find_marker(blocks, "</transcript>")
-    injected = [{"type": "text", "text": "<transcript>\n"}] + [
-        {"type": "text", "text": line + "\n"} for line in lines
-    ]
-    req["messages"][-1]["content"] = blocks[:start] + injected + blocks[end:]
+    between = blocks[start + 1 : end]
+    if not between:
+        raise ValueError("capture format drift: no transcript blocks between the markers")
+    # block A = history (all but the last line), block B = the action under review;
+    # cache_control is copied from the captured blocks (absent if the capture had none).
+    injected = []
+    if len(lines) > 1:
+        block = {"type": "text", "text": "".join(line + "\n" for line in lines[:-1])}
+        if between[0].get("cache_control") is not None:
+            block["cache_control"] = between[0]["cache_control"]
+        injected.append(block)
+    block = {"type": "text", "text": lines[-1] + "\n"}
+    if between[-1].get("cache_control") is not None:
+        block["cache_control"] = between[-1]["cache_control"]
+    injected.append(block)
+    req["messages"][-1]["content"] = blocks[: start + 1] + injected + blocks[end:]
     for msg in req["messages"]:
         if claude_md is None:
             msg["content"] = [
@@ -70,7 +84,8 @@ def build_request(
         else:
             for b in msg["content"]:
                 text = _block_text(b, "block")
-                if text is not None and PLACEHOLDER in text:
-                    b["text"] = text.replace(PLACEHOLDER, claude_md)
+                if text is not None and "  " + PLACEHOLDER in text:
+                    indented = "\n".join("  " + l for l in claude_md.split("\n"))
+                    b["text"] = text.replace("  " + PLACEHOLDER, indented)
     req["messages"] = [m for m in req["messages"] if m["content"]]
     return req

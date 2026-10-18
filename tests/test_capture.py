@@ -3,13 +3,14 @@ import json
 import unittest
 import urllib.request
 
-from automode_bench import capture
+from automode_bench import capture, prompts
 
 EXPECTED_STEPS = [
     ("Read", {"file_path": "README.md"}),
     ("Grep", {"pattern": "x"}),
     ("Glob", {"pattern": "*.md"}),
     ("Edit", {"file_path": "notes.txt", "old_string": "a", "new_string": "b"}),
+    ("Write", {"file_path": "new.txt", "content": "hello\n"}),
     (
         "Bash",
         {"command": 'echo capture > "$AUTOMODE_BENCH_OUT/out.txt"', "description": "write a file"},
@@ -62,7 +63,7 @@ class AgentReplyTest(unittest.TestCase):
             self.assertEqual(block["name"], name, f"n={n}")
             self.assertEqual(block["input"], inp, f"n={n}")
             self.assertEqual(block["id"], f"toolu_cap_{n}")
-        msg = capture.agent_reply(agent_body(5))
+        msg = capture.agent_reply(agent_body(len(EXPECTED_STEPS)))
         self.assertEqual(msg["stop_reason"], "end_turn")
         self.assertEqual(msg["content"], [{"type": "text", "text": "done"}])
 
@@ -105,7 +106,7 @@ def parse_sse(data: str) -> list[dict]:
 
 class SseTest(unittest.TestCase):
     def test_tool_use_round_trip(self):
-        msg = capture.agent_reply(agent_body(4))  # the Bash step
+        msg = capture.agent_reply(agent_body(len(EXPECTED_STEPS) - 1))  # the Bash step
         events = parse_sse(capture.sse(msg).decode())
         self.assertEqual(events[0]["type"], "message_start")
         self.assertEqual(events[-1]["type"], "message_stop")
@@ -128,6 +129,95 @@ class SseTest(unittest.TestCase):
             if e["type"] == "content_block_delta" and e["delta"]["type"] == "text_delta"
         )
         self.assertEqual(text, msg["content"][0]["text"])
+
+
+def dumps(obj: dict) -> str:
+    """A transcript line, Claude Code's compact JSON."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def transcript_body(lines: list[str]) -> dict:
+    """A classifier request: block A = all but the last line, block B = the last line."""
+    cache = {"type": "ephemeral"}
+    blocks = [
+        {"type": "text", "text": "Judge the last action.\n"},
+        {"type": "text", "text": "<transcript>\n"},
+        {
+            "type": "text",
+            "text": "".join(line + "\n" for line in lines[:-1]),
+            "cache_control": cache,
+        },
+        {"type": "text", "text": lines[-1] + "\n", "cache_control": cache},
+        {"type": "text", "text": "</transcript>\nAnswer with <block>."},
+    ]
+    return {"messages": [{"role": "user", "content": blocks}]}
+
+
+class TranscriptLinesTest(unittest.TestCase):
+    def test_two_blocks_split_into_lines(self):
+        lines = [
+            dumps({"user": "Do the steps."}),
+            dumps({"Edit": {"file_path": "notes.txt", "adds": "b", "removes": "a",
+                            "removesTruncated": False}}),
+            dumps({"Write": "new.txt: hello\n"}),
+        ]
+        self.assertEqual(capture._transcript_lines(transcript_body(lines)), lines)
+
+    def test_drops_blank_lines(self):
+        body = transcript_body(["a"])
+        between = body["messages"][0]["content"]
+        between[2]["text"] = "\n\nb\n\n"
+        between[3]["text"] = "\nc\n\n"
+        self.assertEqual(capture._transcript_lines(body), ["b", "c"])
+
+
+class NormalizePathsTest(unittest.TestCase):
+    def test_replaces_config_path_everywhere(self):
+        obj = {
+            "system": [{"type": "text", "text": "Contents of "
+                        "/tmp/x/automode-bench-config-abc123/CLAUDE.md (user's global):"}],
+            "messages": [[{"text": 'line "C:/tmp/automode-bench-config-9/CLAUDE.md" end'}]],
+            "n": 5,
+            "other": "/tmp/automode-bench-work-abc/CLAUDE.md and "
+                     "/tmp/automode-bench-config-abc123/settings.json",
+        }
+        out = capture.normalize_paths(obj)
+        self.assertEqual(
+            [b["text"] for b in out["system"]],
+            ["Contents of /home/user/.claude/CLAUDE.md (user's global):"],
+        )
+        self.assertEqual(out["messages"][0][0]["text"],
+                         'line "/home/user/.claude/CLAUDE.md" end')
+        self.assertEqual(out["n"], 5)
+        self.assertEqual(out["other"], "/tmp/automode-bench-work-abc/CLAUDE.md and "
+                                       "/tmp/automode-bench-config-abc123/settings.json")
+
+    def test_input_untouched(self):
+        obj = {"text": "/tmp/automode-bench-config-abc123/CLAUDE.md"}
+        capture.normalize_paths(obj)
+        self.assertEqual(obj["text"], "/tmp/automode-bench-config-abc123/CLAUDE.md")
+
+
+class ReadOnlyToolsTest(unittest.TestCase):
+    def test_unobserved_tools(self):
+        lines = [
+            dumps({"user": "Do the steps."}),
+            dumps({"Edit": {"file_path": "notes.txt", "adds": "b", "removes": "a",
+                            "removesTruncated": False}}),
+            dumps({"Write": "new.txt: hello\n"}),
+            "not json",
+            dumps([1, 2]),
+        ]
+        self.assertEqual(capture.read_only_tools(lines), ["Read", "Grep", "Glob", "Bash"])
+
+    def test_all_observed(self):
+        lines = [dumps({name: {}}) for name, _ in EXPECTED_STEPS]
+        self.assertEqual(capture.read_only_tools(lines), [])
+
+
+class ClaudeMdTextTest(unittest.TestCase):
+    def test_placeholder_only(self):
+        self.assertEqual(capture.CLAUDE_MD_TEXT.splitlines(), [prompts.PLACEHOLDER])
 
 
 class ServeTest(unittest.TestCase):

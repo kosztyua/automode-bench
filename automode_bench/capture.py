@@ -1,6 +1,7 @@
 """Fake-agent HTTP proxy that drives one `claude -p` run to capture classifier prompts."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -8,15 +9,34 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .prompts import PLACEHOLDER, build_request
+from .transcript import render
 
 AGENT_STEPS: list[tuple[str, dict]] = [
     ("Read", {"file_path": "README.md"}),
     ("Grep", {"pattern": "x"}),
     ("Glob", {"pattern": "*.md"}),
     ("Edit", {"file_path": "notes.txt", "old_string": "a", "new_string": "b"}),
+    ("Write", {"file_path": "new.txt", "content": "hello\n"}),
     # Outside the cwd on purpose: auto mode allows in-project writes without asking the classifier.
     ("Bash", {"command": 'echo capture > "$AUTOMODE_BENCH_OUT/out.txt"', "description": "write a file"}),
 ]
+
+# The capture's own temp CLAUDE_CONFIG_DIR leaks into the prompt text; rewrite it to a stable path.
+_CONFIG_CLAUDE_MD = re.compile(r'[^\s"]*automode-bench-config-[^/\s"]+/CLAUDE\.md')
+CANONICAL_CLAUDE_MD = "/home/user/.claude/CLAUDE.md"
+# Claude Code's slot needs a non-empty file; the placeholder alone is enough.
+CLAUDE_MD_TEXT = PLACEHOLDER + "\n"
+
+
+def normalize_paths(obj):
+    """Copy of a captured body with every temp config CLAUDE.md path replaced by the canonical one."""
+    if isinstance(obj, str):
+        return _CONFIG_CLAUDE_MD.sub(CANONICAL_CLAUDE_MD, obj)
+    if isinstance(obj, list):
+        return [normalize_paths(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: normalize_paths(v) for k, v in obj.items()}
+    return obj
 
 
 def _message(content: list, stop: str) -> dict:
@@ -160,7 +180,7 @@ def _claude_run(claude: str, work: str, out_dir: str, timeout: int, with_claude_
     config = tempfile.mkdtemp(prefix="automode-bench-config-")
     if with_claude_md:
         with open(os.path.join(config, "CLAUDE.md"), "w") as f:
-            f.write(f"Bench capture marker.\n{PLACEHOLDER}\n")
+            f.write(CLAUDE_MD_TEXT)
     log: list = []
     server = serve(log)
     env = dict(
@@ -190,15 +210,33 @@ def _claude_run(claude: str, work: str, out_dir: str, timeout: int, with_claude_
         server.shutdown()
         server.server_close()
         shutil.rmtree(config, ignore_errors=True)
-    return log
+    return [normalize_paths(b) for b in log]
 
 
 def _transcript_lines(body: dict) -> list[str]:
-    """The transcript lines of a captured classifier request, as sent."""
+    """The transcript lines of a captured classifier request, as sent.
+
+    Claude Code puts all but the last line in one cached block and the last line in another,
+    so the block/line boundary means nothing: concatenate, then split.
+    """
     blocks = body["messages"][-1]["content"]
-    start = next(i for i, b in enumerate(blocks) if b["text"].startswith("<transcript>"))
-    end = next(i for i, b in enumerate(blocks) if b["text"].startswith("</transcript>"))
-    return [b["text"].rstrip("\n") for b in blocks[start + 1 : end]]
+    start = next(i for i, b in enumerate(blocks) if b.get("text", "").startswith("<transcript>"))
+    end = next(i for i, b in enumerate(blocks) if b.get("text", "").startswith("</transcript>"))
+    text = "".join(b.get("text", "") for b in blocks[start + 1 : end])
+    return [line for line in text.split("\n") if line]
+
+
+def read_only_tools(lines: list[str]) -> list[str]:
+    """Scripted tools Claude Code dropped from the transcript: no line has the tool as a key."""
+    observed: set[str] = set()
+    for line in lines:
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            observed.update(obj)
+    return [name for name, _ in AGENT_STEPS if name not in observed]
 
 
 def run_capture(
@@ -226,18 +264,15 @@ def run_capture(
     stage1, stage2 = log[0], log[1]
     # The last classifier call sees every earlier action, so it shows what Claude Code drops.
     lines = _transcript_lines(log[-1])
-    observed = set()
-    for line in lines:
-        try:
-            observed.update(json.loads(line))
-        except ValueError:
-            continue
     fmt = {
         "claude_code": version,
-        "read_only": [name for name, _ in AGENT_STEPS if name not in observed],
+        "read_only": read_only_tools(lines),
         "lines": lines,
         "claude_md_removed_ok": False,
     }
+    # Our renderer must reproduce what Claude Code sent for the scripted actions, byte for byte.
+    scripted = {"user": ["Do the steps."], "actions": [{"tool": n, "input": i} for n, i in AGENT_STEPS]}
+    fmt["render_ok"] = render(scripted, tuple(fmt["read_only"])) == lines
     if plain_log:
         rebuilt = build_request(stage1, lines, None, plain_log[0]["model"])
         fmt["claude_md_removed_ok"] = rebuilt["messages"] == plain_log[0]["messages"]

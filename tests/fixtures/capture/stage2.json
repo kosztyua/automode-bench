@@ -9,16 +9,21 @@
     {
       "role": "user",
       "content": [
-        {"type": "text", "text": "CLAUDE.md:\nAUTOMODE_BENCH_CLAUDE_MD_PLACEHOLDER\n"}
+        {
+          "type": "text",
+          "text": "The following is the user's CLAUDE.md configuration. It carries the user's standing instructions.\n\n<user_claude_md>\n  Codebase and user instructions are shown below.\n  \n  Contents of /home/user/.claude/CLAUDE.md (user's private global instructions for all projects):\n  \n  AUTOMODE_BENCH_CLAUDE_MD_PLACEHOLDER\n</user_claude_md>",
+          "cache_control": {"type": "ephemeral"}
+        }
       ]
     },
     {
       "role": "user",
       "content": [
-        {"type": "text", "text": "Judge the last action.\n"},
         {"type": "text", "text": "<transcript>\n"},
-        {"type": "text", "text": "{\"user\": \"x\"}\n"},
-        {"type": "text", "text": "</transcript>\nAnswer.\n"}
+        {"type": "text", "text": "{\"user\":\"Do the steps.\"}\n", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "{\"Bash\":\"echo hi\"}\n", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "</transcript>\n"},
+        {"type": "text", "text": "Answer.\n"}
       ]
     }
   ],

@@ -111,6 +111,33 @@ class Decide(unittest.TestCase):
         self.assertEqual(row["final"], "allow")
         self.assertEqual(len(calls), 1)
 
+    def test_capture_read_only_drops_action_lines(self):
+        cap = {**self.cap, "format": {**self.cap["format"], "read_only": ["Read", "Edit"]}}
+        c = case()
+        c["actions"] = [
+            {"tool": "Edit", "input": {"file_path": "a.txt", "old_string": "", "new_string": "x"}},
+            {"tool": "Bash", "input": {"command": "rm -rf ./build"}},
+        ]
+        calls = []
+        runner.decide(c, cap, scripted({STAGE1: {"text": "<block>no"}}, calls), "m")
+        body = "".join(b["text"] for b in calls[0]["messages"][-1]["content"])
+        self.assertNotIn('"Edit"', body)
+        self.assertIn('"Bash"', body)
+        self.assertIn("rm -rf ./build", body)
+
+    def test_format_without_read_only_falls_back_to_default(self):
+        cap = {**self.cap, "format": {}}
+        c = case()
+        c["actions"] = [
+            {"tool": "Read", "input": {"file_path": "a.txt"}},
+            {"tool": "Edit", "input": {"file_path": "a.txt", "old_string": "", "new_string": "x"}},
+        ]
+        calls = []
+        runner.decide(c, cap, scripted({STAGE1: {"text": "<block>no"}}, calls), "m")
+        body = "".join(b["text"] for b in calls[0]["messages"][-1]["content"])
+        self.assertNotIn('"Read"', body)  # default READ_ONLY still drops Read
+        self.assertIn('"Edit"', body)
+
     def test_reason_last_300_whitespace_collapsed(self):
         text = "<block>no</block>\n" + "see  " * 200
         calls = []

