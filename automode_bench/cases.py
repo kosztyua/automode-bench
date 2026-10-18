@@ -19,14 +19,21 @@ _OK_HOSTS = {
 _OK_SUFFIXES = (".example", ".invalid", ".test")
 _OK_NETS = tuple(
     ipaddress.ip_network(n)
-    for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "127.0.0.0/8")
+    for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "127.0.0.0/8",
+              "0.0.0.0/32", "::1/128", "2001:db8::/32")
 )
 
-_URL_HOST = re.compile(r"[a-z][a-z0-9+.-]*://([\w.-]+)", re.I)
-_USER_HOST = re.compile(r"[\w+-]+@([\w-]+(?:\.[\w-]+)+)")
-_CMD_HOST = re.compile(
-    r"\b(?:nc|ssh|scp|curl|wget|ping|telnet)\s+([\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,})\b")
-_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+_NET_CMDS = frozenset((
+    "curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "rsync",
+    "ping", "telnet", "dig", "host", "nslookup", "ftp",
+))
+_SCHEME_HOST = re.compile(r"[a-z][a-z0-9+.-]*://(\[[^\]]+\]|[\w.-]+)", re.I)
+_USER_HOST = re.compile(r"[\w.+-]+@(\[[^\]]+\]|[\w-]+(?:\.[\w-]+)+)")
+_BRACKET = re.compile(r"\[([0-9a-fA-F:.]{3,})\]")
+_DEV_TCP = re.compile(r"/dev/(?:tcp|udp)/([^/\s]+)/")
+_SOCKET = re.compile(r"(?:create_connection|connect)\(\s*\(\s*['\"]([^'\"]+)['\"]")
+_SEGMENT = re.compile(r"\|\||&&|[;\n|]")
+_LABEL = re.compile(r"[A-Za-z]{2,}$")
 
 
 def load_cases(paths: list[str]) -> list[dict]:
@@ -49,16 +56,46 @@ def load_cases(paths: list[str]) -> list[dict]:
     return cases
 
 
+def _as_host(cand: str) -> str | None:
+    """Normalize a candidate (strip brackets/quotes/user@/port/path) and keep it only if it is an IP or a dotted domain."""
+    t = cand.strip("[]'\" ")
+    if "@" in t:
+        t = t.rsplit("@", 1)[1]
+    t = t.split("/", 1)[0]
+    if t.count(":") == 1:
+        t = t.rsplit(":", 1)[0]
+    t = t.lower().rstrip(".")
+    if not t:
+        return None
+    try:
+        ipaddress.ip_address(t)
+        return t
+    except ValueError:
+        pass
+    # ponytail: decimal/hex IP forms (ping 2130706433) are not detected.
+    if "." in t and re.fullmatch(r"[\w.-]+", t) and _LABEL.search(t):
+        return t
+    return None
+
+
 def hosts_in(text: str) -> set[str]:
-    """Hosts referenced in text: URL hosts, user@host, bare host after net commands, IPv4."""
-    hosts = (set(_URL_HOST.findall(text)) | set(_USER_HOST.findall(text))
-             | set(_CMD_HOST.findall(text)))
-    for ip in _IPV4.findall(text):
-        try:
-            ipaddress.ip_address(ip)
-        except ValueError:
+    """Hosts referenced in text, found only in positions where a host can appear:
+    URL/bracket/user@/dev-tcp/socket-call hosts and bare tokens of net-command segments.
+    A candidate counts if it is an IP or has a dot with a letters-only last label."""
+    hosts = set()
+    for pat in (_SCHEME_HOST, _USER_HOST, _BRACKET, _DEV_TCP, _SOCKET):
+        for cand in pat.findall(text):
+            if (h := _as_host(cand)):
+                hosts.add(h)
+    for seg in _SEGMENT.split(text):
+        toks = seg.split()
+        if not toks or toks[0].strip("'\"").rsplit("/", 1)[-1] not in _NET_CMDS:
             continue
-        hosts.add(ip)
+        for t in toks[1:]:
+            if t.startswith("-") or "://" in t:
+                continue
+            if (h := _as_host(t)):
+                hosts.add(h)
     return hosts
 
 
@@ -109,23 +146,48 @@ def _check(case: dict, dup: bool, by_id: dict[str, dict]) -> list[str]:
         add(f"last action is read-only ({actions[-1]['tool']})")
     pair = case.get("pair")
     if pair:
-        twin = by_id.get(pair)
-        if twin is None:
-            add(f"pair {pair!r} not found")
-        elif twin.get("label") == case.get("label"):
-            add(f"pair {pair!r} has the same label")
+        if not isinstance(pair, str):
+            add(f"pair {pair!r} is not a string")
+        elif case.get("label") == "judgment":
+            add("judgment case may not have a pair")
+        else:
+            twin = by_id.get(pair)
+            if twin is None:
+                add(f"pair {pair!r} not found")
+            elif {case.get("label"), twin.get("label")} != {"block", "allow"}:
+                add(f"pair {pair!r} must be a block/allow twin")
     text = json.dumps({k: v for k, v in case.items() if not k.startswith("_")},
                       ensure_ascii=False)
-    for host in sorted(hosts_in(text)):
+    if "<transcript>" in text or "</transcript>" in text:
+        add("case text contains a <transcript> marker")
+    hosts = set()
+    for value in _strings(case):
+        hosts |= hosts_in(value)
+    for host in sorted(hosts):
         if not host_ok(host):
             add(f"non-reserved host {host!r}")
     return problems
+
+
+def _strings(obj):
+    """Every string in a nested case structure (skipping _file/_line metadata keys)."""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if not (isinstance(k, str) and k.startswith("_")):
+                yield from _strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _strings(v)
 
 
 def validate(cases: list[dict]) -> list[str]:
     """Every schema/pair/hostname problem in the set, each prefixed with the case id."""
     ids = [c["id"] for c in cases if isinstance(c.get("id"), str) and c["id"]]
     counts = Counter(ids)
-    by_id = {c["id"]: c for c in cases if c.get("id") in counts}
+    by_id = {c["id"]: c for c in cases
+             if isinstance(c.get("id"), str) and c["id"] in counts}
     return [p for c in cases
-            for p in _check(c, counts.get(c.get("id"), 0) > 1, by_id)]
+            for p in _check(c, isinstance(c.get("id"), str) and counts[c["id"]] > 1,
+                            by_id)]

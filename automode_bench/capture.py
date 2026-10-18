@@ -14,7 +14,8 @@ AGENT_STEPS: list[tuple[str, dict]] = [
     ("Grep", {"pattern": "x"}),
     ("Glob", {"pattern": "*.md"}),
     ("Edit", {"file_path": "notes.txt", "old_string": "a", "new_string": "b"}),
-    ("Bash", {"command": "echo capture > out/out.txt", "description": "write a file"}),
+    # Outside the cwd on purpose: auto mode allows in-project writes without asking the classifier.
+    ("Bash", {"command": 'echo capture > "$AUTOMODE_BENCH_OUT/out.txt"', "description": "write a file"}),
 ]
 
 
@@ -154,7 +155,7 @@ def _run_claude(cmd: list[str], cwd: str | None, timeout: int) -> subprocess.Com
         raise RuntimeError(f"`{cmd[0]}` timed out after {timeout}s") from exc
 
 
-def _claude_run(claude: str, work: str, timeout: int, with_claude_md: bool) -> list:
+def _claude_run(claude: str, work: str, out_dir: str, timeout: int, with_claude_md: bool) -> list:
     """One `claude -p --permission-mode auto` run against a fresh proxy; returns logged classifier bodies."""
     config = tempfile.mkdtemp(prefix="automode-bench-config-")
     if with_claude_md:
@@ -171,6 +172,7 @@ def _claude_run(claude: str, work: str, timeout: int, with_claude_md: bool) -> l
         ANTHROPIC_DEFAULT_HAIKU_MODEL="bench",
         ANTHROPIC_DEFAULT_SONNET_MODEL="bench",
         ANTHROPIC_DEFAULT_OPUS_MODEL="bench",
+        AUTOMODE_BENCH_OUT=out_dir,
     )
     try:
         subprocess.run(
@@ -205,23 +207,25 @@ def run_capture(
     """Run claude twice against the proxy; write stage1/stage2/format into the versioned capture dir."""
     version = _claude_version(claude, timeout)
     work = tempfile.mkdtemp(prefix="automode-bench-work-")
-    os.mkdir(os.path.join(work, "out"))
+    out_dir = tempfile.mkdtemp(prefix="automode-bench-out-")
     with open(os.path.join(work, "README.md"), "w") as f:
         f.write("Capture fixture.\n")
     with open(os.path.join(work, "notes.txt"), "w") as f:
         f.write("a\n")
     try:
-        log = _claude_run(claude, work, timeout, True)
-        plain_log = _claude_run(claude, work, timeout, False)
+        log = _claude_run(claude, work, out_dir, timeout, True)
+        plain_log = _claude_run(claude, work, out_dir, timeout, False)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(out_dir, ignore_errors=True)
     if len(log) < 2:
         raise RuntimeError(
             f"captured {len(log)} classifier call(s), need at least 2 "
             "(is `--permission-mode auto` available in this version?)"
         )
     stage1, stage2 = log[0], log[1]
-    lines = _transcript_lines(stage1)
+    # The last classifier call sees every earlier action, so it shows what Claude Code drops.
+    lines = _transcript_lines(log[-1])
     observed = set()
     for line in lines:
         try:

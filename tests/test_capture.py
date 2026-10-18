@@ -12,7 +12,7 @@ EXPECTED_STEPS = [
     ("Edit", {"file_path": "notes.txt", "old_string": "a", "new_string": "b"}),
     (
         "Bash",
-        {"command": "echo capture > out/out.txt", "description": "write a file"},
+        {"command": 'echo capture > "$AUTOMODE_BENCH_OUT/out.txt"', "description": "write a file"},
     ),
 ]
 

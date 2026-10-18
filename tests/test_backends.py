@@ -15,6 +15,8 @@ class Handler(BaseHTTPRequestHandler):
             {"path": self.path, "headers": dict(self.headers), "body": json.loads(raw)}
         )
         self.send_response(self.server.status)
+        if 300 <= self.server.status < 400:
+            self.send_header("Location", self.path)
         self.end_headers()
         self.wfile.write(self.server.reply)
 
@@ -62,7 +64,7 @@ class CallTest(unittest.TestCase):
         headers = {k.lower(): v for k, v in req["headers"].items()}
         self.assertEqual(req["path"], "/v1/messages")
         self.assertEqual(headers["x-api-key"], "k1")
-        self.assertEqual(headers["authorization"], "Bearer k1")
+        self.assertNotIn("authorization", headers)
         self.assertEqual(headers["anthropic-version"], "2023-06-01")
         self.assertEqual(headers["content-type"], "application/json")
         self.assertEqual(req["body"], ANTHROPIC_REQUEST)
@@ -79,6 +81,10 @@ class CallTest(unittest.TestCase):
         }).encode())
         res = backends.call("openai", url, ANTHROPIC_REQUEST)
         req = srv.requests[0]
+        headers = {k.lower(): v for k, v in req["headers"].items()}
+        self.assertEqual(headers["authorization"], "Bearer local")
+        self.assertEqual(headers["content-type"], "application/json")
+        self.assertNotIn("x-api-key", headers)
         self.assertEqual(req["path"], "/v1/chat/completions")
         self.assertEqual(req["body"]["model"], "m")
         self.assertEqual(req["body"]["max_tokens"], 2112)
@@ -101,19 +107,50 @@ class CallTest(unittest.TestCase):
         url, _ = self.serve(reply=json.dumps({"choices": [{"message": {"content": None}}], "usage": {}}).encode())
         res = backends.call("openai", url, ANTHROPIC_REQUEST)
         self.assertEqual(res["text"], "")
-        self.assertIsNone(res["error"])
+        self.assertEqual(res["error"], "empty reply")
 
-    def test_http_500(self):
+    def test_non_string_reply_text(self):
+        reply = json.dumps({"choices": [{"message": {"content": ["a"]}}], "usage": {}}).encode()
+        url, _ = self.serve(reply=reply)
+        res = backends.call("openai", url, ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertEqual(res["error"], "empty reply")
+
+    def test_http_error_includes_body(self):
         url, _ = self.serve(status=500, reply=b"boom")
         res = backends.call("anthropic", url, ANTHROPIC_REQUEST)
         self.assertEqual(res["text"], "")
-        self.assertIn("500", res["error"])
+        self.assertEqual(res["error"], "HTTP 500: boom")
 
-    def test_empty_content_200(self):
+    def test_http_error_body_truncated_to_200(self):
+        url, _ = self.serve(status=400, reply=b"x" * 500)
+        res = backends.call("anthropic", url, ANTHROPIC_REQUEST)
+        self.assertIn("x" * 200, res["error"])
+        self.assertNotIn("x" * 201, res["error"])
+
+    def test_redirect_refused(self):
+        url, _ = self.serve(status=302, reply=b"")
+        res = backends.call("anthropic", url, ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIn("redirect", res["error"].lower())
+
+    def test_empty_reply_200(self):
         url, _ = self.serve(reply=json.dumps({"content": [], "usage": {}}).encode())
         res = backends.call("anthropic", url, ANTHROPIC_REQUEST)
         self.assertEqual(res["text"], "")
-        self.assertIsNone(res["error"])
+        self.assertEqual(res["error"], "empty reply")
+
+    def test_malformed_request_never_raises(self):
+        url, _ = self.serve()
+        res = backends.call("openai", url, {})
+        self.assertEqual(res["text"], "")
+        self.assertIsNotNone(res["error"])
+
+    def test_json_list_reply_never_raises(self):
+        url, _ = self.serve(reply=b"[1, 2]")
+        res = backends.call("anthropic", url, ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIsNotNone(res["error"])
 
     def test_non_json_body(self):
         url, _ = self.serve(reply=b"<html>not json</html>")

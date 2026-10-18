@@ -1,4 +1,5 @@
 """Tests for automode_bench.prompts against the synthetic capture fixture."""
+import copy
 import json
 import os
 import tempfile
@@ -77,6 +78,42 @@ class BuildRequestTest(unittest.TestCase):
             texts(req, -1),
             ["Judge the last action.\n", "<transcript>\n", "</transcript>\nAnswer.\n"],
         )
+
+
+class BuildRequestDriftTest(unittest.TestCase):
+    def setUp(self):
+        self.cap = load_capture(FIXTURE)
+
+    def stage(self):
+        return copy.deepcopy(self.cap["stage1"])
+
+    def test_missing_start_marker_raises_valueerror(self):
+        st = self.stage()
+        st["messages"][-1]["content"][1]["text"] = "<nope>\n"
+        with self.assertRaisesRegex(ValueError, "capture format drift"):
+            build_request(st, ["l"], "md", "m")
+
+    def test_missing_end_marker_raises_valueerror(self):
+        st = self.stage()
+        st["messages"][-1]["content"][3]["text"] = "no end here\n"
+        with self.assertRaisesRegex(ValueError, "capture format drift"):
+            build_request(st, ["l"], "md", "m")
+
+    def test_text_block_without_text_raises_valueerror(self):
+        st = self.stage()
+        st["messages"][-1]["content"].insert(0, {"type": "text"})
+        with self.assertRaisesRegex(ValueError, "capture format drift"):
+            build_request(st, ["l"], "md", "m")
+
+    def test_non_text_blocks_are_skipped(self):
+        st = self.stage()
+        image = {"type": "image", "source": {}}
+        st["messages"][-1]["content"].insert(0, dict(image))
+        st["messages"][0]["content"].append(dict(image))
+        req = build_request(st, ["l"], "Allow X", "m")
+        self.assertEqual(req["messages"][-1]["content"][0], image)
+        self.assertEqual(req["messages"][0]["content"][0]["text"], "CLAUDE.md:\nAllow X\n")
+        self.assertEqual(req["messages"][0]["content"][1], image)
 
 
 class CaptureDirTest(unittest.TestCase):

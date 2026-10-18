@@ -30,6 +30,24 @@ def load_capture(path: str) -> dict:
     return out
 
 
+def _block_text(block: dict, where: str) -> str | None:
+    """Text of a text block, None for other block types, ValueError if malformed."""
+    if block.get("type") != "text":
+        return None
+    try:
+        return block["text"]
+    except KeyError:
+        raise ValueError(f"capture format drift: {where} text block lacks 'text': {block!r}") from None
+
+
+def _find_marker(blocks: list, marker: str) -> int:
+    for i, b in enumerate(blocks):
+        text = _block_text(b, f"block {i} of last message")
+        if text is not None and text.startswith(marker):
+            return i
+    raise ValueError(f"capture format drift: no block starting with {marker!r} in last message")
+
+
 def build_request(
     stage: dict, lines: list[str], claude_md: str | None, model: str
 ) -> dict:
@@ -38,18 +56,21 @@ def build_request(
     req["model"] = model
     req.pop("metadata", None)
     blocks = req["messages"][-1]["content"]
-    start = next(i for i, b in enumerate(blocks) if b["text"].startswith("<transcript>"))
-    end = next(i for i, b in enumerate(blocks) if b["text"].startswith("</transcript>"))
+    start = _find_marker(blocks, "<transcript>")
+    end = _find_marker(blocks, "</transcript>")
     injected = [{"type": "text", "text": "<transcript>\n"}] + [
         {"type": "text", "text": line + "\n"} for line in lines
     ]
     req["messages"][-1]["content"] = blocks[:start] + injected + blocks[end:]
     for msg in req["messages"]:
         if claude_md is None:
-            msg["content"] = [b for b in msg["content"] if PLACEHOLDER not in b["text"]]
+            msg["content"] = [
+                b for b in msg["content"] if PLACEHOLDER not in (_block_text(b, "block") or "")
+            ]
         else:
             for b in msg["content"]:
-                if PLACEHOLDER in b["text"]:
-                    b["text"] = b["text"].replace(PLACEHOLDER, claude_md)
+                text = _block_text(b, "block")
+                if text is not None and PLACEHOLDER in text:
+                    b["text"] = text.replace(PLACEHOLDER, claude_md)
     req["messages"] = [m for m in req["messages"] if m["content"]]
     return req
