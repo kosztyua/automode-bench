@@ -1,6 +1,9 @@
-"""Tests for backends.call against a local stdlib HTTP server (no network)."""
+"""Tests for backends.call: local HTTP server for anthropic/openai, fake claude on PATH for claude-cli."""
 import json
+import os
+import shutil
 import socket
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -168,7 +171,7 @@ class CallTest(unittest.TestCase):
         self.assertIsNotNone(res["error"])
 
     def test_unknown_backend(self):
-        res = backends.call("claude-cli", "http://127.0.0.1:1", ANTHROPIC_REQUEST)
+        res = backends.call("bogus", "http://127.0.0.1:1", ANTHROPIC_REQUEST)
         self.assertEqual(res["text"], "")
         self.assertIsNotNone(res["error"])
 
@@ -176,6 +179,126 @@ class CallTest(unittest.TestCase):
         url, _ = self.serve(reply=json.dumps({"content": [], "usage": {}}).encode())
         before = json.dumps(ANTHROPIC_REQUEST)
         backends.call("openai", url, ANTHROPIC_REQUEST)
+        self.assertEqual(json.dumps(ANTHROPIC_REQUEST), before)
+
+
+FAKE_ECHO = """
+import json, os, sys
+argv = sys.argv[1:]
+stdin = sys.stdin.read()
+system = ""
+if "--system-prompt-file" in argv:
+    with open(argv[argv.index("--system-prompt-file") + 1]) as f:
+        system = f.read()
+env = {k: os.environ.get(k) for k in
+       ("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "AUTOMODE_FAKE_MARKER", "PATH")}
+print(json.dumps({
+    "result": json.dumps({"argv": argv, "stdin": stdin, "system": system, "cwd": os.getcwd(),
+                          "env": env}),
+    "is_error": False,
+    "usage": {"input_tokens": 3},
+}))
+"""
+
+
+class ClaudeCliTest(unittest.TestCase):
+    def fake(self, body):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with open(os.path.join(d, "claude"), "w") as f:
+            f.write("#!/usr/bin/env python3\n" + body)
+        os.chmod(os.path.join(d, "claude"), 0o755)
+        old = os.environ["PATH"]
+        os.environ["PATH"] = d + os.pathsep + old
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+
+    def test_invocation_and_result(self):
+        self.fake(FAKE_ECHO)
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertIsNone(res["error"])
+        self.assertEqual(res["usage"], {"input_tokens": 3})
+        payload = json.loads(res["text"])
+        argv = payload["argv"]
+        self.assertEqual(argv[0], "-p")
+        self.assertEqual(argv[argv.index("--model") + 1], "m")
+        self.assertEqual(argv[argv.index("--tools") + 1], "")
+        self.assertEqual(argv[argv.index("--output-format") + 1], "json")
+        self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
+        self.assertEqual(payload["system"], "sys a\nsys b")
+        self.assertEqual(payload["stdin"], "one\ntwo\n")
+        cwd = payload["cwd"]
+        self.assertTrue(os.path.realpath(cwd).startswith(os.path.realpath(tempfile.gettempdir())))
+        self.assertNotEqual(cwd, os.getcwd())
+        self.assertFalse(os.path.exists(cwd))
+
+    def test_billing_header_and_message_separation(self):
+        self.fake(FAKE_ECHO)
+        req = {"model": "m", "max_tokens": 5,
+               "system": [{"type": "text", "text": "x-anthropic-billing-header: cc_version=1;"},
+                          {"type": "text", "text": "policy"}],
+               "messages": [{"role": "user", "content": [{"type": "text", "text": "md"}]},
+                            {"role": "user", "content": [{"type": "text", "text": "<t>\n"}, {"type": "text", "text": "x\n"}]}]}
+        payload = json.loads(backends.call("claude-cli", "", req)["text"])
+        self.assertEqual(payload["system"], "policy")
+        self.assertEqual(payload["stdin"], "md\n\n<t>\nx\n")
+
+    def test_child_env_inherits_and_disables_claude_mds(self):
+        self.fake(FAKE_ECHO)
+        os.environ["AUTOMODE_FAKE_MARKER"] = "kept"
+        self.addCleanup(os.environ.pop, "AUTOMODE_FAKE_MARKER", None)
+        # unset so the test proves the backend sets it, not the ambient env
+        os.environ.pop("CLAUDE_CODE_DISABLE_CLAUDE_MDS", None)
+        payload = json.loads(backends.call("claude-cli", "", ANTHROPIC_REQUEST)["text"])
+        self.assertEqual(payload["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1")
+        self.assertEqual(payload["env"]["AUTOMODE_FAKE_MARKER"], "kept")
+        self.assertTrue(payload["env"]["PATH"])
+
+    def test_nonzero_exit(self):
+        self.fake("import sys\nsys.stderr.write('kaboom')\nsys.exit(3)\n")
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIn("3", res["error"])
+        self.assertIn("kaboom", res["error"])
+
+    def test_is_error_flag(self):
+        self.fake('print(\'{"result": "oops", "is_error": true}\')\n')
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIn("oops", res["error"])
+
+    def test_non_json_stdout(self):
+        self.fake("print('not json at all')\n")
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIsNotNone(res["error"])
+
+    def test_empty_result(self):
+        self.fake('print(\'{"result": "", "is_error": false}\')\n')
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIsNotNone(res["error"])
+
+    def test_claude_missing_on_path(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        old = os.environ["PATH"]
+        os.environ["PATH"] = d
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertIn("claude", res["error"])
+
+    def test_timeout(self):
+        self.fake("import time\ntime.sleep(30)\n")
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST, timeout=1)
+        self.assertEqual(res["text"], "")
+        self.assertIn("timed out", res["error"].lower())
+        self.assertLess(res["seconds"], 10)
+
+    def test_never_mutates_request(self):
+        self.fake(FAKE_ECHO)
+        before = json.dumps(ANTHROPIC_REQUEST)
+        backends.call("claude-cli", "", ANTHROPIC_REQUEST)
         self.assertEqual(json.dumps(ANTHROPIC_REQUEST), before)
 
 

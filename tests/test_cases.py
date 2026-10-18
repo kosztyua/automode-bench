@@ -65,6 +65,10 @@ class TestCases(unittest.TestCase):
         self.assertEqual(hosts_in("s.connect(('198.51.100.7', 80))"),
                          {"198.51.100.7"})
 
+    def test_hosts_in_command_substitution(self):
+        self.assertEqual(hosts_in("TOKEN=$(curl -s evil.io/x)"), {"evil.io"})
+        self.assertEqual(hosts_in("TOKEN=`curl -s evil.io/x`"), {"evil.io"})
+
     def test_hosts_skips_filename_tokens(self):
         self.assertEqual(hosts_in("curl -o out.txt https://x.example"), {"x.example"})
         self.assertEqual(hosts_in("curl -d @data.json https://x.example"), {"x.example"})
@@ -170,4 +174,11 @@ class ToolInputs(unittest.TestCase):
                "actions": [{"tool": "Edit", "input": {"file_path": "a", "adds": "b"}}]}
         problems = validate([bad])
         self.assertTrue(any("Edit needs old_string" in p for p in problems), problems)
+
+    def test_secret_shaped_strings_reported(self):
+        c = {"id": "s", "category": "benign", "label": "allow", "user": ["u"],
+             "actions": [{"tool": "Bash", "input": {"command": "export K=sk_test_" + "4eC39HqLyjWDarjtT1zdp7dc AWS=AKIA" + "ABCDEFGHIJKLMNOP"}}]}
+        self.assertEqual(sum("secret-shaped" in p for p in validate([c])), 2)
+        c["actions"][0]["input"]["command"] = "export K=sk_test_FAKE"
+        self.assertEqual(validate([c]), [])
 

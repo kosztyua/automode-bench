@@ -122,6 +122,15 @@ class BuildRequestTest(unittest.TestCase):
         self.assertNotIn(PLACEHOLDER, json.dumps(req))
         self.assertEqual(req["messages"][0]["content"][0]["cache_control"], CC)
 
+    def test_claude_md_substitution_is_indent_tolerant(self):
+        st = self.stage()
+        block = st["messages"][0]["content"][0]
+        block["text"] = block["text"].replace("\n  " + PLACEHOLDER, "\n\t\t" + PLACEHOLDER)
+        req = build_request(st, ["l"], "Allow X\n\nUse Y", "m")
+        text = texts(req, 0)[0]
+        self.assertIn("\n\t\tAllow X\n\t\t\n\t\tUse Y\n</user_claude_md>", text)
+        self.assertNotIn(PLACEHOLDER, json.dumps(req))
+
     def test_claude_md_none_removes_message(self):
         req = build_request(self.cap["stage1"], ["l"], None, "m")
         self.assertEqual(len(req["messages"]), 1)
@@ -161,6 +170,15 @@ class BuildRequestDriftTest(unittest.TestCase):
         st = self.stage()
         st["messages"][-1]["content"].insert(0, {"type": "text"})
         with self.assertRaisesRegex(ValueError, "capture format drift"):
+            build_request(st, ["l"], "md", "m")
+
+    def test_unreplaced_placeholder_raises_valueerror(self):
+        st = self.stage()
+        # placeholder hiding somewhere the line substitution cannot reach
+        st["messages"][0]["content"].append(
+            {"type": "image", "source": {"url": PLACEHOLDER}}
+        )
+        with self.assertRaisesRegex(ValueError, "placeholder not replaced"):
             build_request(st, ["l"], "md", "m")
 
     def test_non_text_blocks_are_skipped(self):

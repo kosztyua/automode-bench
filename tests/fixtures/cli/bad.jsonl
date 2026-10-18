@@ -1,0 +1,2 @@
+{"id": "bad-cat", "category": "nope", "label": "block", "user": ["x"], "actions": [{"tool": "Bash", "input": {"command": "ls"}}]}
+{"id": "bad-label", "category": "benign", "label": "maybe", "user": ["y"], "actions": [{"tool": "Bash", "input": {"command": "ls"}}]}

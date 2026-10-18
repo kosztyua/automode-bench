@@ -84,8 +84,18 @@ def build_request(
         else:
             for b in msg["content"]:
                 text = _block_text(b, "block")
-                if text is not None and "  " + PLACEHOLDER in text:
-                    indented = "\n".join("  " + l for l in claude_md.split("\n"))
-                    b["text"] = text.replace("  " + PLACEHOLDER, indented)
+                if text is None or PLACEHOLDER not in text:
+                    continue
+                # replace the whole placeholder line, re-indenting claude_md to match
+                out = []
+                for line in text.split("\n"):
+                    if PLACEHOLDER in line:
+                        indent = line[: len(line) - len(line.lstrip())]
+                        out.extend(indent + l for l in claude_md.split("\n"))
+                    else:
+                        out.append(line)
+                b["text"] = "\n".join(out)
+    if PLACEHOLDER in json.dumps(req):
+        raise ValueError("capture format drift: CLAUDE.md placeholder not replaced")
     req["messages"] = [m for m in req["messages"] if m["content"]]
     return req

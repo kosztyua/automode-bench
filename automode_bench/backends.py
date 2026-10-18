@@ -1,10 +1,13 @@
 """Send one request to a model backend; return text, usage, seconds, error. Never raises."""
 import json
+import os
+import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
-BACKENDS = ("anthropic", "openai")
+BACKENDS = ("anthropic", "openai", "claude-cli")
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -23,6 +26,8 @@ def call(
     if backend not in BACKENDS:
         return _result("", {}, 0.0, f"unknown backend: {backend}")
     start = time.time()
+    if backend == "claude-cli":
+        return _claude_cli(request, timeout, start)
     try:
         target = url.rstrip("/") + ("/v1/messages" if backend == "anthropic" else "/v1/chat/completions")
         if backend == "anthropic":
@@ -48,6 +53,56 @@ def call(
         return _result("", {}, time.time() - start, f"HTTP {e.code}: {_body_snippet(e)}")
     except Exception as e:
         return _result("", {}, time.time() - start, f"{type(e).__name__}: {e}")
+    if not isinstance(text, str) or not text:
+        return _result("", {}, time.time() - start, "empty reply")
+    return _result(text, data.get("usage") or {}, time.time() - start, None)
+
+
+def _claude_cli(request: dict, timeout: float, start: float) -> dict:
+    """Run `claude -p` with the captured prompt; user's login env inherited, cwd a temp dir."""
+    try:
+        # A system prompt starting with Claude Code's billing-header line makes the CLI silently
+        # use its default prompt instead (verified 2.1.302), so that block is dropped.
+        system = "\n".join(b["text"] for b in request.get("system") or []
+                           if not b["text"].startswith("x-anthropic-billing-header"))
+        # Messages are separate turns in the API; keep them apart in the single CLI prompt.
+        prompt = "\n\n".join(
+            "".join(b["text"] for b in m.get("content") or []) for m in request.get("messages") or []
+        )
+        with tempfile.TemporaryDirectory(prefix="automode-bench-cli-") as cwd:
+            sys_file = os.path.join(cwd, "system_prompt.txt")
+            with open(sys_file, "w", encoding="utf-8") as f:
+                f.write(system)
+            proc = subprocess.run(
+                [
+                    "claude", "-p",
+                    "--model", request["model"],
+                    "--system-prompt-file", sys_file,
+                    "--tools", "",
+                    "--output-format", "json",
+                    "--setting-sources", "",
+                ],
+                input=prompt, capture_output=True, text=True, cwd=cwd, timeout=timeout,
+                # the judge must not see the user's own CLAUDE.md (verified 2.1.302)
+                env={**os.environ, "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"},
+            )
+    except subprocess.TimeoutExpired:
+        return _result("", {}, time.time() - start, f"claude timed out after {timeout}s")
+    except FileNotFoundError:
+        return _result("", {}, time.time() - start, "claude not found on PATH")
+    except Exception as e:
+        return _result("", {}, time.time() - start, f"{type(e).__name__}: {e}")
+    if proc.returncode != 0:
+        return _result(
+            "", {}, time.time() - start, f"exit {proc.returncode}: {proc.stderr[:200].strip()}"
+        )
+    try:
+        data = json.loads(proc.stdout)
+        text = data["result"]
+    except Exception:
+        return _result("", {}, time.time() - start, f"bad CLI output: {proc.stdout[:200]}")
+    if data.get("is_error"):
+        return _result("", {}, time.time() - start, f"is_error: {str(text)[:200]}")
     if not isinstance(text, str) or not text:
         return _result("", {}, time.time() - start, "empty reply")
     return _result(text, data.get("usage") or {}, time.time() - start, None)

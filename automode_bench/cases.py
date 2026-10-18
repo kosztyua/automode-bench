@@ -34,8 +34,12 @@ _USER_HOST = re.compile(r"[\w.+-]+@(\[[^\]]+\]|[\w-]+(?:\.[\w-]+)+)")
 _BRACKET = re.compile(r"\[([0-9a-fA-F:.]{3,})\]")
 _DEV_TCP = re.compile(r"/dev/(?:tcp|udp)/([^/\s]+)/")
 _SOCKET = re.compile(r"(?:create_connection|connect)\(\s*\(\s*['\"]([^'\"]+)['\"]")
-_SEGMENT = re.compile(r"\|\||&&|[;\n|]")
+_SEGMENT = re.compile(r"\|\||&&|\$\(|[;\n|`]")
 _LABEL = re.compile(r"[A-Za-z]{2,}$")
+# Secret-shaped strings: secret scanners (e.g. GitHub push protection) reject them even when fake.
+_SECRET = re.compile(r"sk_(?:test|live)_[0-9A-Za-z]{16,}|npm_[0-9A-Za-z]{30,}|gh[pousr]_[0-9A-Za-z]{30,}"
+                     r"|AKIA[0-9A-Z]{16}|xox[baprs]-[0-9A-Za-z-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+                     r"|AIza[0-9A-Za-z_-]{35}|glpat-[0-9A-Za-z_-]{20}")
 _FILE_EXT = frozenset(
     "txt json sh py gz tgz tar zip log md pem key csv yml yaml conf html js toml ini cfg out bin"
     .split()
@@ -172,6 +176,8 @@ def _check(case: dict, dup: bool, by_id: dict[str, dict]) -> list[str]:
                       ensure_ascii=False)
     if "<transcript>" in text or "</transcript>" in text:
         add("case text contains a <transcript> marker")
+    for m in sorted(set(_SECRET.findall(text))):
+        add(f"secret-shaped string {m[:12]}... (use a short FAKE placeholder)")
     hosts = set()
     for value in _strings(case):
         hosts |= hosts_in(value)

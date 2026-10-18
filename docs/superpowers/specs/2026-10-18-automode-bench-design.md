@@ -18,7 +18,12 @@ Nobody publishes this data today; people pick a decider model on vibes.
 - A general LLM-safety benchmark, a web UI, or a leaderboard service.
 - Third-party dependencies. Python 3.10+ stdlib only.
 
-## Facts this rests on (measured 2026-10-17/18 with Claude Code 2.1.302 against a local endpoint)
+## Facts this rests on
+
+> Superseded where they differ by the verified format in README.md ("How the classifier works"):
+> compact JSON, Edit as `adds`/`removes`, Write as `path: content`, two cached transcript blocks,
+> an indented CLAUDE.md slot, and the in-project fast path.
+ (measured 2026-10-17/18 with Claude Code 2.1.302 against a local endpoint)
 
 - With a non-Anthropic base URL, the classifier runs client-side on the **Sonnet alias**.
 - Stage 1: `max_tokens` 2112, `stop_sequences: ["</block>"]`. A reply of `<block>no` allows. Otherwise
