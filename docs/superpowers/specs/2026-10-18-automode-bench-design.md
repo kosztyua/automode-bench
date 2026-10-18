@@ -107,7 +107,7 @@ once without CLAUDE.md and checks that "removed" equals what Claude Code sends; 
 - `anthropic`: POST `/v1/messages`, the captured request with model and transcript replaced. Records
   `usage` including `cache_read_input_tokens`.
 - `openai`: POST `/v1/chat/completions`; system blocks joined into one system message, content blocks
-  joined to strings, `stop` from `stop_sequences`, `temperature` 0.
+  joined to strings, `stop` from `stop_sequences`, sampling fields only if the request has them (Claude Code sends none; the first version forced `temperature` 0).
 - `claude_cli`: `claude -p --model M --system-prompt-file F --tools "" --output-format json` with the
   user content on stdin, run with `CLAUDE_CONFIG_DIR` set to a temp dir copy-free of the user's CLAUDE.md.
   No stop sequence (stage 1 output is longer); verdict parsing is the same. Uses the user's subscription

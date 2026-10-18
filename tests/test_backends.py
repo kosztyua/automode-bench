@@ -91,7 +91,7 @@ class CallTest(unittest.TestCase):
         self.assertEqual(req["path"], "/v1/chat/completions")
         self.assertEqual(req["body"]["model"], "m")
         self.assertEqual(req["body"]["max_tokens"], 2112)
-        self.assertEqual(req["body"]["temperature"], 0)
+        self.assertNotIn("temperature", req["body"])  # Claude Code sends none
         self.assertEqual(req["body"]["stop"], ["</block>"])
         self.assertNotIn("stop_sequences", req["body"])
         self.assertNotIn("system", req["body"])

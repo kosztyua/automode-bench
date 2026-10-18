@@ -117,7 +117,6 @@ def _openai_body(request: dict) -> dict:
     body = {
         "model": request["model"],
         "max_tokens": request["max_tokens"],
-        "temperature": 0,
         "messages": [
             {"role": "system", "content": "\n".join(b["text"] for b in request.get("system") or [])}
         ]
@@ -129,6 +128,10 @@ def _openai_body(request: dict) -> dict:
     }
     if request.get("stop_sequences"):
         body["stop"] = request["stop_sequences"]
+    # sampling fields only when the request carries them; Claude Code's classifier sends none
+    for k in ("temperature", "top_p", "top_k"):
+        if k in request:
+            body[k] = request[k]
     if request.get("reasoning_effort"):
         body["reasoning_effort"] = request["reasoning_effort"]
     return body
