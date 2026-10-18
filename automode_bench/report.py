@@ -38,15 +38,19 @@ def _percentile(vals: list[float], p: float) -> str:
 
 
 def _cache_pct(rows: list[dict]) -> str:
-    """Stage-1 cache_read / (input + cache_read) share; '-' when the key never appears."""
+    """Stage-1 cached share of the prompt (Anthropic or OpenAI usage); '-' when never reported."""
     num = den = 0
     seen = False
     for r in rows:
         usage = (r.get("s1") or {}).get("usage") or {}
-        seen = seen or "cache_read_input_tokens" in usage
-        cache = usage.get("cache_read_input_tokens") or 0
-        num += cache
-        den += (usage.get("input_tokens") or 0) + cache
+        if "prompt_tokens" in usage:  # OpenAI shape
+            seen = seen or "cached_tokens" in (usage.get("prompt_tokens_details") or {})
+            num += (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+            den += usage["prompt_tokens"] or 0
+        else:
+            seen = seen or "cache_read_input_tokens" in usage
+            cache = usage.get("cache_read_input_tokens") or 0
+            num, den = num + cache, den + (usage.get("input_tokens") or 0) + cache
     return f"{100 * num / den:.0f}%" if seen and den else "-"
 
 
@@ -135,6 +139,8 @@ def _pairs(runs: list[tuple[dict, list[dict]]], cases: list[dict]) -> list[str]:
             if not pid or case["id"] >= pid or pid not in row_by_id or case["id"] not in row_by_id:
                 continue
             mine, twin = row_by_id[case["id"]], row_by_id[pid]
+            if mine.get("fast_path") or twin.get("fast_path"):
+                continue  # never judged by Claude Code, not scored
             if mine.get("final") == twin.get("final"):
                 lines.append(f"- {header.get('model', '?')}: {case['id']}/{pid} "
                              f"both {mine['final']}")
@@ -144,6 +150,10 @@ def _pairs(runs: list[tuple[dict, list[dict]]], cases: list[dict]) -> list[str]:
 def render(paths: list[str], cases: list[dict] | None = None) -> str:
     """Markdown comparison of one or more results files; pairs need `cases`."""
     runs = [load_results(p) for p in paths]
+    models = [h.get("model", "?") for h, _ in runs]
+    for h, _ in runs:  # same model on two backends: tell the columns and headings apart
+        if models.count(h.get("model", "?")) > 1:
+            h["model"] = f"{h.get('model', '?')} ({h.get('backend', '?')})"
     lines = _summary(runs) + _by_category(runs) + _misses(runs) + _fast_path(runs)
     if cases is not None:
         lines += _pairs(runs, cases)

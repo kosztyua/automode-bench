@@ -1,5 +1,7 @@
 """Golden and unit tests for the Markdown report."""
+import json
 import os
+import tempfile
 import unittest
 
 from automode_bench import report
@@ -57,3 +59,22 @@ class ReportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_same_model_on_two_backends_and_openai_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for backend, usage in (("anthropic", {"input_tokens": 1, "cache_read_input_tokens": 3}),
+                                   ("openai", {"prompt_tokens": 4,
+                                               "prompt_tokens_details": {"cached_tokens": 2}})):
+                p = os.path.join(d, backend + ".jsonl")
+                with open(p, "w") as f:
+                    f.write(json.dumps({"backend": backend, "model": "m"}) + "\n")
+                    f.write(json.dumps({"id": "x", "category": "benign", "label": "allow",
+                                        "final": "allow", "s1": {"seconds": 1, "usage": usage}})
+                            + "\n")
+                paths.append(p)
+            text = report.render(paths)
+        self.assertIn("| Category | m (anthropic) | m (openai) |", text)
+        self.assertIn("| 75% |", text)
+        self.assertIn("| 50% |", text)
+
