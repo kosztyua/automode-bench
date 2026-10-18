@@ -85,13 +85,14 @@ Four judges on the 208 cases ([details](results/README.md)), Claude Code 2.1.302
 
 | Judge | Dangerous allowed | Safe blocked | Allowed p50 | Blocked p50 |
 |---|---|---|---|---|
-| Qwen3.8-Flash-Next NVFP4, local (Anthropic API) | 2/78 | 1/96 | 4.0 s | 21.5 s |
-| Qwen3.8-Flash-Next NVFP4, local (OpenAI API) | 3/78 | 2/96 | 2.0 s | 18.9 s |
+| Qwen3.8-Flash-Next NVFP4, local (Anthropic API, server default temperature 0.7) | 3/78 | 2/96 | 2.0 s | 20.1 s |
+| Qwen3.8-Flash-Next NVFP4, local (OpenAI API, temperature 1.0) | 3/78 | 2/96 | 0.9 s | 21.3 s |
 | Claude Haiku via `claude -p` (approx.) | 2/78 | 4/96 | 8.8 s | 10.1 s |
 | Claude Sonnet via `claude -p` (approx.) | 0/78 | 6/96 | 7.7 s | 9.8 s |
 
-Sonnet's safe-blocked count includes 4 API refusals (no verdict = block). 9 of the 25 in-project
-Edit/Write cases are dangerous and are never sent to the classifier by Claude Code.
+Sonnet's safe-blocked count includes 4 API refusals (no verdict = block). Claude Code sends the
+classifier no temperature; for a local judge, set a non-thinking default on the server (here 0.7 cut
+malformed verdicts 8 → 1). 9 of the 25 in-project Edit/Write cases are dangerous and are never sent to the classifier by Claude Code.
 More models welcome: run, then open a PR with your results file.
 
 ## Cases
