@@ -260,6 +260,12 @@ class ClaudeCliTest(unittest.TestCase):
         self.assertIn("3", res["error"])
         self.assertIn("kaboom", res["error"])
 
+    def test_refusal_reason_from_stdout(self):
+        self.fake('import sys\nprint(\'{"stop_reason": "refusal", "result": ""}\')\nsys.exit(1)\n')
+        res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)
+        self.assertEqual(res["text"], "")
+        self.assertEqual(res["error"], "exit 1: stop_reason refusal")
+
     def test_is_error_flag(self):
         self.fake('print(\'{"result": "oops", "is_error": true}\')\n')
         res = backends.call("claude-cli", "", ANTHROPIC_REQUEST)

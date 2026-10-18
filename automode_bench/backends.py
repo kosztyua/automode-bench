@@ -93,9 +93,13 @@ def _claude_cli(request: dict, timeout: float, start: float) -> dict:
     except Exception as e:
         return _result("", {}, time.time() - start, f"{type(e).__name__}: {e}")
     if proc.returncode != 0:
-        return _result(
-            "", {}, time.time() - start, f"exit {proc.returncode}: {proc.stderr[:200].strip()}"
-        )
+        # a model refusal exits 1 with empty stderr; the reason is in the JSON on stdout
+        detail = proc.stderr[:200].strip()
+        try:
+            detail = detail or f"stop_reason {json.loads(proc.stdout)['stop_reason']}"
+        except Exception:
+            detail = detail or proc.stdout[:200].strip()
+        return _result("", {}, time.time() - start, f"exit {proc.returncode}: {detail}")
     try:
         data = json.loads(proc.stdout)
         text = data["result"]
